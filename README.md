@@ -17,6 +17,14 @@ A collection of bash scripts to backup and migrate entire GitHub organizations, 
 - `bash` shell
 - Authenticated GitHub account with access to both organizations
 
+>[!NOTE]
+> If you're into [`Nix`](https://github.com/NixOS/nix), then you'll just need one tool.
+> Run ...
+> ```sh
+> nix develop
+> ```
+> ... & `Nix` will install the required tools for you by reading `flake.nix`
+
 ## Quick Start
 
 ### Complete Migration (Recommended)
