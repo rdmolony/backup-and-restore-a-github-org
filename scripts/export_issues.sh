@@ -30,6 +30,12 @@ cd "$BACKUP_DIR"
 for repo in "${REPOS[@]}"; do
     echo "Exporting issues from $ORG/$repo..."
     
+    # Skip if backup file already exists
+    if [ -f "${repo}_issues.json" ]; then
+        echo "  ✓ Issues already backed up, skipping..."
+        continue
+    fi
+    
     # Export issues using GitHub API
     gh api graphql --paginate -f query="
     query(\$owner: String!, \$repo: String!, \$cursor: String) {

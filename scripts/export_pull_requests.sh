@@ -30,6 +30,12 @@ cd "$BACKUP_DIR"
 for repo in "${REPOS[@]}"; do
     echo "Exporting pull requests from $ORG/$repo..."
     
+    # Skip if backup file already exists
+    if [ -f "${repo}_pull_requests.json" ]; then
+        echo "  ✓ Pull requests already backed up, skipping..."
+        continue
+    fi
+    
     # Export pull requests using GitHub API
     gh api graphql --paginate -f query="
     query(\$owner: String!, \$repo: String!, \$cursor: String) {
