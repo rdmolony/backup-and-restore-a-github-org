@@ -81,21 +81,24 @@ class GitHubMigrator:
                 else:
                     raise e
             
-            # Migrate issues
+            # Migrate repository content (code, history) first if enabled
+            if self.migrate_content:
+                logger.info(f"Starting repository content migration for {repo_name}...")
+                if not self.migrate_repository_content(repo_name):
+                    logger.warning(f"Failed to migrate repository content for {repo_name}, but continuing")
+                    # Don't fail the entire migration for content issues
+                else:
+                    logger.info(f"Repository content migration completed successfully for {repo_name}")
+            else:
+                logger.info(f"Repository content migration disabled, skipping for {repo_name}")
+            
+            # Migrate issues after content
             logger.info(f"Getting issues for {repo_name}")
             issues = self.client.get_issues(self.source_org, repo_name)
             logger.info(f"Found {len(issues)} issues to migrate")
             
             if not self.migrate_issues(repo_name, issues):
                 return False
-            
-            # Migrate repository content (code, history) if enabled
-            if self.migrate_content:
-                if not self.migrate_repository_content(repo_name):
-                    logger.warning(f"Failed to migrate repository content for {repo_name}, but continuing")
-                    # Don't fail the entire migration for content issues
-            else:
-                logger.info(f"Repository content migration disabled, skipping for {repo_name}")
             
             # Mark repository as completed
             self.state.mark_repo_completed(repo_name)
@@ -231,6 +234,14 @@ class GitHubMigrator:
         """Migrate repository content (code, history) from source to target."""
         logger.info(f"Starting repository content migration for {repo_name}")
         
+        # Check if source repository exists and has content
+        try:
+            # Try to get repository info first
+            source_url_check = f"https://api.github.com/repos/{self.source_org}/{repo_name}"
+            logger.info(f"Checking if source repository {self.source_org}/{repo_name} exists and has content")
+        except Exception as e:
+            logger.warning(f"Could not verify source repository: {e}")
+        
         # Create temporary directory for cloning
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_dir = os.path.join(temp_dir, repo_name)
@@ -238,7 +249,7 @@ class GitHubMigrator:
             try:
                 # Clone source repository
                 source_url = f"https://{self.github_token}@github.com/{self.source_org}/{repo_name}.git"
-                logger.info(f"Cloning source repository {self.source_org}/{repo_name}")
+                logger.info(f"Cloning source repository {self.source_org}/{repo_name} (this may take a while for large repos)")
                 
                 result = subprocess.run([
                     'git', 'clone', '--mirror', source_url, repo_dir
@@ -266,7 +277,7 @@ class GitHubMigrator:
                         return False
                     
                     # Push all branches and tags to target
-                    logger.info(f"Pushing all content to target repository")
+                    logger.info(f"Pushing all content to target repository {self.target_org}/{repo_name} (this may take a while)")
                     
                     # Push all refs (branches, tags, etc.)
                     result = subprocess.run([
