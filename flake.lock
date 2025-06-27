@@ -1,5 +1,29 @@
 {
   "nodes": {
+    "claude-sync": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "utils": [
+          "utils"
+        ]
+      },
+      "locked": {
+        "lastModified": 1750935035,
+        "narHash": "sha256-Q+mmqR81RthJ+NlyGy1zhdVDyfcXOXZ0RWEGlNjEOjM=",
+        "owner": "rdmolony",
+        "repo": "sync-claude-code-with-github-issues",
+        "rev": "8fa6cf75b33662c14caa0e20abc4dbe4a4ecb372",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rdmolony",
+        "ref": "sync-deterministically",
+        "repo": "sync-claude-code-with-github-issues",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1750898778,
@@ -16,6 +40,7 @@
     },
     "root": {
       "inputs": {
+        "claude-sync": "claude-sync",
         "nixpkgs": "nixpkgs",
         "utils": "utils"
       }
