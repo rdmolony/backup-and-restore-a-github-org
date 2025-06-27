@@ -2,6 +2,9 @@
 
 A collection of bash scripts to backup and migrate entire GitHub organizations, including repositories, issues, comments, and pull requests.
 
+> [!CAUTION]
+> This has been written by `Claude` with minimal supervision by me
+
 ## Features
 
 - ✅ **Complete Backup**: Clones all repositories with full git history
