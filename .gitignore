@@ -1,1 +1,5 @@
 .direnv
+repositories
+pull-requests
+issues
+migration_log.txt
