@@ -1,9 +1,10 @@
-# GitHub Organization Migration Tools
+# GitHub Organization Migration Tool
 
-A collection of bash scripts to backup and migrate entire GitHub organizations, including repositories, issues, comments, and pull requests.
+I needed to copy all of my repos, issues & PRs from one organisation to another, so I got Claude to create a `Python` library to do this for me using the `GitHub` API.
 
 > [!CAUTION]
 > This has been written by `Claude` with minimal supervision by me
+
 
 ## Features
 
@@ -15,10 +16,7 @@ A collection of bash scripts to backup and migrate entire GitHub organizations, 
 
 ## Requirements
 
-- [GitHub CLI](https://cli.github.com/) (`gh`)
-- `jq` for JSON processing
-- `bash` shell
-- Authenticated GitHub account with access to both organizations
+- [`python`](https://www.python.org/) 
 
 >[!NOTE]
 > If you're into [`Nix`](https://github.com/NixOS/nix), then you'll just need one tool.
@@ -28,102 +26,57 @@ A collection of bash scripts to backup and migrate entire GitHub organizations, 
 > ```
 > ... & `Nix` will install the required tools for you by reading `flake.nix`
 
+
 ## Quick Start
 
-### Complete Migration (Recommended)
-```bash
-# Backup source org and migrate to target org in one step
-./scripts/migrate_organization.sh source-org target-org /path/to/backup
-```
-
-### Step-by-Step Migration
-```bash
-# 1. Backup source organization
-./scripts/backup_all.sh source-org /path/to/backup
-
-# 2. Migrate to target organization
-./scripts/migrate_with_rate_limits.sh source-org target-org /path/to/backup
-```
-
-## Scripts Overview
-
-| Script | Purpose |
-|--------|---------|
-| `migrate_organization.sh` | **Complete migration** (backup + migrate) |
-| `backup_all.sh` | Backup entire organization |
-| `migrate_with_rate_limits.sh` | Migrate from backup to target org |
-| `clone_repositories.sh` | Clone all repositories |
-| `export_issues.sh` | Export all issues and comments |
-| `export_pull_requests.sh` | Export all pull requests |
-
-## Examples
+> [!NOTE]
+> If you use the `GitHub` CLI, you can generate a token with `gh auth token` & replace `$GITHUB_TOKEN` below with `$(gh auth token)`
 
 ```bash
-# Migrate powerscope to thalora-dev
-./scripts/migrate_organization.sh powerscope thalora-dev ./backup
+# Basic migration
+python migrate.py powerscope thalora-dev $GITHUB_TOKEN
 
-# Backup powerscope organization
-./scripts/backup_all.sh powerscope ./powerscope-backup
+# With custom settings
+python migrate.py powerscope thalora-dev $GITHUB_TOKEN \
+  --state-file ./my_migration.json \
+  --issues-per-min 10 \
+  --comments-per-min 15
 ```
 
-## Backup Structure
+## Resume Capability
 
-```
-backup-directory/
-├── repositories/          # Cloned git repositories
-│   ├── repo1/
-│   ├── repo2/
-│   └── ...
-├── issues/               # Exported issues as JSON
-│   ├── repo1_issues.json
-│   ├── repo2_issues.json
-│   └── ...
-├── pull-requests/        # Exported PRs as JSON
-│   ├── repo1_pull_requests.json
-│   ├── repo2_pull_requests.json
-│   └── ...
-└── migration_log.txt    # Migration progress log
-```
+If migration fails at any point, simply run the same command again:
 
-## Rate Limits
-
-The scripts automatically handle GitHub API rate limits:
-- **Issues/Comments**: 20 per minute, 150 per hour
-- **Repositories**: No specific limits (git operations)
-- **Automatic delays**: Built-in waiting when approaching limits
-
-## Limitations
-
-- **Pull Requests**: Cannot be recreated exactly due to GitHub API limitations. They are documented as special issues instead.
-- **Repository Settings**: Webhooks, secrets, and advanced settings are not migrated.
-- **Large Files**: LFS files are supported but may require additional time.
-
-## Authentication
-
-Ensure GitHub CLI is authenticated:
 ```bash
-gh auth login
-gh auth status
+python migrate.py powerscope thalora-dev $GITHUB_TOKEN
 ```
 
-The authenticated user must have:
-- Read access to source organization
-- Admin access to target organization (to create repositories)
+The tool will:
+1. Skip completed repositories
+2. Skip completed issues within repositories  
+3. Resume adding comments from the exact comment that failed
 
-## Troubleshooting
+## Testing
 
-### Rate Limit Errors
-- Scripts automatically handle rate limits with delays
-- If errors persist, check your GitHub API quota: `gh api rate_limit`
+```bash
+# Run all tests
+python run_tests.py
 
-### Missing Repositories
-- Verify authentication: `gh auth status`
-- Check organization access: `gh repo list source-org`
+# Tests are designed to run with only standard library
+# No pytest, mock, or other dependencies needed
+```
 
-### Permission Errors
-- Ensure target organization exists
-- Verify admin permissions on target organization
+## Error Handling
 
-## License
+The tool exits immediately on API failures but provides clear error messages and resume instructions. Common failure points:
 
-MIT License - Feel free to use and modify these scripts for your needs.
+1. **Rate limits exceeded** - Wait and resume
+2. **API token issues** - Check token permissions  
+3. **Network issues** - Resume when connection restored
+4. **Repository already exists** - Skipped automatically
+
+## Requirements
+
+- Python 3.6+
+- GitHub personal access token with appropriate permissions
+- No additional packages needed

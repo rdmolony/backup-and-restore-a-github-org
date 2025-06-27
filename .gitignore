@@ -3,3 +3,5 @@ repositories
 pull-requests
 issues
 migration_log.txt
+__pycache__
+migration_state.json

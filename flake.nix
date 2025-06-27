@@ -15,9 +15,8 @@
     {
       devShell = pkgs.mkShell {
         buildInputs = with pkgs; [
-          gh
           claude-sync
-          jq
+          python3
         ];
       };
     }
