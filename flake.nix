@@ -17,6 +17,7 @@
         buildInputs = with pkgs; [
           gh
           claude-sync
+          jq
         ];
       };
     }
