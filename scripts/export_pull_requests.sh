@@ -21,7 +21,7 @@ mkdir -p "$BACKUP_DIR"
 
 # Get list of all repositories in the organization
 echo "Discovering repositories in $ORG organization..."
-REPOS=($(gh -- repo list "$ORG" --limit 1000 --json name --jq '.[].name'))
+REPOS=($(gh repo list "$ORG" --limit 1000 --json name --jq '.[].name'))
 
 echo "Found ${#REPOS[@]} repositories to process"
 
@@ -31,7 +31,7 @@ for repo in "${REPOS[@]}"; do
     echo "Exporting pull requests from $ORG/$repo..."
     
     # Export pull requests using GitHub API
-    gh -- api graphql --paginate -f query="
+    gh api graphql --paginate -f query="
     query(\$owner: String!, \$repo: String!, \$cursor: String) {
       repository(owner: \$owner, name: \$repo) {
         pullRequests(first: 100, after: \$cursor, orderBy: {field: CREATED_AT, direction: ASC}) {
@@ -91,8 +91,8 @@ for repo in "${REPOS[@]}"; do
     
     if [ $? -eq 0 ]; then
         # Handle both GraphQL structure and empty responses
-        if [ "$(jq -- 'type' "${repo}_pull_requests.json")" = '"object"' ]; then
-            actual_count=$(cat "${repo}_pull_requests.json" | jq -- '.data.repository.pullRequests.nodes | length')
+        if [ "$(jq 'type' "${repo}_pull_requests.json")" = '"object"' ]; then
+            actual_count=$(cat "${repo}_pull_requests.json" | jq '.data.repository.pullRequests.nodes | length')
         else
             actual_count=0
             echo "[]" > "${repo}_pull_requests.json"
