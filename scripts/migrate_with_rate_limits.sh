@@ -153,6 +153,7 @@ wait_for_rate_limit() {
 # Function to create repository
 create_repository() {
     local repo_name=$1
+    local original_dir=$(pwd)
     
     echo "=== Creating repository: $TARGET_ORG/$repo_name ==="
     
@@ -187,6 +188,7 @@ create_repository() {
     git remote remove thalora 2>/dev/null || true
     
     echo "  ✓ Repository content pushed successfully"
+    cd "$original_dir"
 }
 
 # Function to create issues with comments
