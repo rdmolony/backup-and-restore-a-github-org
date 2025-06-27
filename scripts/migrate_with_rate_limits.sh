@@ -19,6 +19,7 @@ SOURCE_REPOS_DIR="$BACKUP_BASE_DIR/repositories"
 ISSUES_DIR="$BACKUP_BASE_DIR/issues"
 PULLS_DIR="$BACKUP_BASE_DIR/pull-requests"
 LOG_FILE="$BACKUP_BASE_DIR/migration_log.txt"
+STATE_FILE="$BACKUP_BASE_DIR/migration_state.json"
 
 echo "======================================="
 echo "GITHUB ORGANIZATION MIGRATION"
@@ -43,6 +44,60 @@ HOUR_START=$(date +%s)
 MINUTE_START=$(date +%s)
 ISSUES_THIS_HOUR=0
 COMMENTS_THIS_HOUR=0
+
+# Initialize state file if it doesn't exist
+initialize_state_file() {
+    if [ ! -f "$STATE_FILE" ]; then
+        echo '{}' > "$STATE_FILE"
+    fi
+}
+
+# Check if repository is completed
+is_repo_completed() {
+    local repo_name=$1
+    jq -r ".repositories[\"$repo_name\"].completed // false" "$STATE_FILE"
+}
+
+# Check if issue is completed
+is_issue_completed() {
+    local repo_name=$1
+    local issue_number=$2
+    jq -r ".repositories[\"$repo_name\"].issues[\"$issue_number\"].completed // false" "$STATE_FILE"
+}
+
+# Get comment progress for an issue
+get_comment_progress() {
+    local repo_name=$1
+    local issue_number=$2
+    jq -r ".repositories[\"$repo_name\"].issues[\"$issue_number\"].comments_completed // 0" "$STATE_FILE"
+}
+
+# Mark issue as completed
+mark_issue_completed() {
+    local repo_name=$1
+    local issue_number=$2
+    local temp_file=$(mktemp)
+    jq ".repositories[\"$repo_name\"].issues[\"$issue_number\"].completed = true" "$STATE_FILE" > "$temp_file"
+    mv "$temp_file" "$STATE_FILE"
+}
+
+# Update comment progress
+update_comment_progress() {
+    local repo_name=$1
+    local issue_number=$2
+    local comments_done=$3
+    local temp_file=$(mktemp)
+    jq ".repositories[\"$repo_name\"].issues[\"$issue_number\"].comments_completed = $comments_done" "$STATE_FILE" > "$temp_file"
+    mv "$temp_file" "$STATE_FILE"
+}
+
+# Mark repository as completed
+mark_repo_completed() {
+    local repo_name=$1
+    local temp_file=$(mktemp)
+    jq ".repositories[\"$repo_name\"].completed = true" "$STATE_FILE" > "$temp_file"
+    mv "$temp_file" "$STATE_FILE"
+}
 
 # Discover repositories from backup directory
 echo "Discovering repositories from backup..."
@@ -227,16 +282,27 @@ create_issues() {
         # Empty array, no issues to process
         return 0
     else
-        jq -c '.data.repository.issues.nodes[]' "$ISSUES_DIR/${repo_name}_issues.json" | while read -r issue_json; do
-        issue_index=$((issue_index + 1))
+        # Process issues using a for loop to avoid subshell problems
+        local temp_issues=$(mktemp)
+        jq -c '.data.repository.issues.nodes[]' "$ISSUES_DIR/${repo_name}_issues.json" > "$temp_issues"
         
-        # Extract issue data
-        local title=$(echo "$issue_json" | jq -r '.title')
-        local body=$(echo "$issue_json" | jq -r '.body // ""')
-        local state=$(echo "$issue_json" | jq -r '.state')
-        local comments=$(echo "$issue_json" | jq -c '.comments.nodes[]' 2>/dev/null || echo "")
-        
-        echo "    [$issue_index/$issue_count] Creating: $title"
+        while IFS= read -r issue_json; do
+            issue_index=$((issue_index + 1))
+            
+            # Extract issue data
+            local title=$(echo "$issue_json" | jq -r '.title')
+            local body=$(echo "$issue_json" | jq -r '.body // ""')
+            local state=$(echo "$issue_json" | jq -r '.state')
+            local original_number=$(echo "$issue_json" | jq -r '.number')
+            local comments=$(echo "$issue_json" | jq -c '.comments.nodes[]' 2>/dev/null || echo "")
+            
+            echo "    [$issue_index/$issue_count] Creating: $title"
+            
+            # Check if this issue is already completed
+            if [ "$(is_issue_completed "$repo_name" "$original_number")" = "true" ]; then
+                echo "      ✓ Issue already completed, skipping..."
+                continue
+            fi
         
         # Wait for rate limit
         wait_for_rate_limit "issue"
@@ -259,10 +325,24 @@ create_issues() {
             # Add comments if any
             if [ -n "$comments" ]; then
                 local comment_count=$(echo "$comments" | wc -l)
-                echo "      Adding $comment_count comments..."
+                local comments_completed=$(get_comment_progress "$repo_name" "$original_number")
                 
-                echo "$comments" | while read -r comment_json; do
+                echo "      Adding $comment_count comments (starting from comment $((comments_completed + 1)))..."
+                
+                # Save comments to temporary file for processing
+                local temp_comments=$(mktemp)
+                echo "$comments" > "$temp_comments"
+                
+                local comment_index=0
+                while IFS= read -r comment_json; do
                     if [ -n "$comment_json" ]; then
+                        comment_index=$((comment_index + 1))
+                        
+                        # Skip already completed comments
+                        if [ "$comment_index" -le "$comments_completed" ]; then
+                            continue
+                        fi
+                        
                         local comment_body=$(echo "$comment_json" | jq -r '.body')
                         local comment_author=$(echo "$comment_json" | jq -r '.author.login')
                         local comment_date=$(echo "$comment_json" | jq -r '.createdAt')
@@ -281,11 +361,21 @@ create_issues() {
                             COMMENTS_PER_MINUTE=$((COMMENTS_PER_MINUTE + 1))
                             COMMENTS_THIS_HOUR=$((COMMENTS_THIS_HOUR + 1))
                             echo -n "."
+                            
+                            # Update progress
+                            update_comment_progress "$repo_name" "$original_number" "$comment_index"
                         else
                             echo -n "E"
+                            echo ""
+                            echo "✗ FATAL ERROR: Failed to create comment $comment_index for issue #$issue_number in $TARGET_ORG/$repo_name"
+                            echo "$(date): Fatal error during comment creation in $repo_name (issue $original_number, comment $comment_index)" >> "$LOG_FILE"
+                            echo "Migration stopped due to API errors. Run the script again to resume from this point."
+                            rm -f "$temp_comments"
+                            exit 1
                         fi
                     fi
-                done
+                done < "$temp_comments"
+                rm -f "$temp_comments"
                 echo ""
             fi
             
@@ -297,10 +387,19 @@ create_issues() {
                 ISSUES_THIS_HOUR=$((ISSUES_THIS_HOUR + 1))
                 echo "      ✓ Closed issue #$issue_number"
             fi
+            
+            # Mark issue as completed
+            mark_issue_completed "$repo_name" "$original_number"
         else
             echo "      ✗ Failed to create issue"
+            echo "✗ FATAL ERROR: Failed to create issue '$title' in $TARGET_ORG/$repo_name"
+            echo "$(date): Fatal error during issue creation in $repo_name" >> "$LOG_FILE"
+            echo "Migration stopped due to API errors. Run the script again to resume."
+            rm -f "$temp_issues"
+            exit 1
         fi
-        done
+        done < "$temp_issues"
+        rm -f "$temp_issues"
     fi
 }
 
@@ -418,6 +517,9 @@ migrate_repository() {
     echo "  View at: https://github.com/$TARGET_ORG/$repo_name"
     echo "$(date): Completed migration of $repo_name" >> "$LOG_FILE"
     
+    # Mark repository as completed
+    mark_repo_completed "$repo_name"
+    
     return 0
 }
 
@@ -425,11 +527,24 @@ migrate_repository() {
 echo "Starting comprehensive migration with rate limiting..."
 echo "$(date): Starting comprehensive migration" > "$LOG_FILE"
 
-# Initialize rate limiting
+# Initialize state file and rate limiting
+initialize_state_file
 MINUTE_START=$(date +%s)
 HOUR_START=$(date +%s)
 
 for repo in "${SORTED_REPOS[@]}"; do
+    # Check if repository is already completed in our state
+    if [ "$(is_repo_completed "$repo")" = "true" ]; then
+        echo ""
+        echo "======================================="
+        echo "SKIPPING: $repo (already completed)"
+        echo "Time: $(date)"
+        echo "======================================="
+        echo "✓ SKIPPED: $repo - Already completed migration"
+        echo "$(date): Skipped $repo - already completed" >> "$LOG_FILE"
+        continue
+    fi
+    
     # Check if repository already exists and skip entirely if it does
     if gh repo view "$TARGET_ORG/$repo" >/dev/null 2>&1; then
         echo ""
