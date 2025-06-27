@@ -4,12 +4,37 @@
 # Rate limits: 20 issues per minute, 150 per hour, same for comments
 set -e
 
-SOURCE_ORG="powerscope"
-TARGET_ORG="thalora-dev"
-SOURCE_REPOS_DIR="/home/rowanm/sandbox/powerscope-backup/repositories"
-ISSUES_DIR="/home/rowanm/sandbox/powerscope-backup/issues"
-PULLS_DIR="/home/rowanm/sandbox/powerscope-backup/pull-requests"
-LOG_FILE="/home/rowanm/sandbox/powerscope-backup/migration_log.txt"
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 <source_organization> <target_organization> <backup_directory>"
+    echo ""
+    echo "This script migrates repositories, issues, and pull requests from one"
+    echo "GitHub organization to another, respecting API rate limits."
+    exit 1
+fi
+
+SOURCE_ORG="$1"
+TARGET_ORG="$2"
+BACKUP_BASE_DIR="$3"
+SOURCE_REPOS_DIR="$BACKUP_BASE_DIR/repositories"
+ISSUES_DIR="$BACKUP_BASE_DIR/issues"
+PULLS_DIR="$BACKUP_BASE_DIR/pull-requests"
+LOG_FILE="$BACKUP_BASE_DIR/migration_log.txt"
+
+echo "======================================="
+echo "GITHUB ORGANIZATION MIGRATION"
+echo "Source: $SOURCE_ORG"
+echo "Target: $TARGET_ORG"
+echo "Backup Directory: $BACKUP_BASE_DIR"
+echo "$(date)"
+echo "======================================="
+
+# Check if backup directories exist
+if [ ! -d "$SOURCE_REPOS_DIR" ] || [ ! -d "$ISSUES_DIR" ] || [ ! -d "$PULLS_DIR" ]; then
+    echo "Error: Backup directories not found!"
+    echo "Please run the backup script first:"
+    echo "  ./backup_all.sh $SOURCE_ORG $BACKUP_BASE_DIR"
+    exit 1
+fi
 
 # Rate limiting counters
 ISSUES_PER_MINUTE=0
@@ -19,25 +44,58 @@ MINUTE_START=$(date +%s)
 ISSUES_THIS_HOUR=0
 COMMENTS_THIS_HOUR=0
 
-# Repository list ordered by complexity (simplest first)
-REPOS=(
-    "tiddlywiki"        # 0 issues, 0 PRs
-    "visualiser"        # 0 issues, 0 PRs  
-    "load"              # 0 issues, 0 PRs
-    "price"             # 0 issues, 0 PRs
-    "atta-wardley-maps" # 0 issues, 0 PRs
-    "marketing"         # 0 issues, 0 PRs
-    "orchestrator"      # 3 issues, 0 PRs
-    "cbc-solver"        # 3 issues, 1 PR
-    "solar"             # 3 issues, 0 PRs
-    "streamlit"         # 7 issues, 0 PRs
-    "experiments"       # 7 issues, 0 PRs
-    "terraform"         # 7 issues, 0 PRs
-    "finance"           # 8 issues, 0 PRs
-    "powerscopeit"      # 11 issues, 0 PRs
-    "research"          # 36 issues, 0 PRs
-    "model"             # 57 issues, 24 PRs
-)
+# Discover repositories from backup directory
+echo "Discovering repositories from backup..."
+REPOS=()
+if [ -d "$SOURCE_REPOS_DIR" ]; then
+    for repo_dir in "$SOURCE_REPOS_DIR"/*; do
+        if [ -d "$repo_dir" ]; then
+            repo_name=$(basename "$repo_dir")
+            REPOS+=("$repo_name")
+        fi
+    done
+fi
+
+if [ ${#REPOS[@]} -eq 0 ]; then
+    echo "Error: No repositories found in $SOURCE_REPOS_DIR"
+    echo "Please run the backup script first."
+    exit 1
+fi
+
+echo "Found ${#REPOS[@]} repositories to migrate: ${REPOS[*]}"
+
+# Sort repositories by complexity (number of issues + PRs)
+declare -A REPO_COMPLEXITY
+for repo in "${REPOS[@]}"; do
+    issues_count=0
+    prs_count=0
+    
+    # Count issues
+    if [ -f "$ISSUES_DIR/${repo}_issues.json" ]; then
+        if [ "$(nix run nixpkgs#jq -- 'type' "$ISSUES_DIR/${repo}_issues.json")" = '"object"' ]; then
+            issues_count=$(nix run nixpkgs#jq -- '.data.repository.issues.nodes | length' "$ISSUES_DIR/${repo}_issues.json" 2>/dev/null || echo "0")
+        fi
+    fi
+    
+    # Count PRs
+    if [ -f "$PULLS_DIR/${repo}_pull_requests.json" ]; then
+        if [ "$(nix run nixpkgs#jq -- 'type' "$PULLS_DIR/${repo}_pull_requests.json")" = '"object"' ]; then
+            prs_count=$(nix run nixpkgs#jq -- '.data.repository.pullRequests.nodes | length' "$PULLS_DIR/${repo}_pull_requests.json" 2>/dev/null || echo "0")
+        fi
+    fi
+    
+    REPO_COMPLEXITY["$repo"]=$((issues_count + prs_count))
+done
+
+# Sort repositories by complexity (simplest first)
+SORTED_REPOS=($(for repo in "${!REPO_COMPLEXITY[@]}"; do
+    echo "${REPO_COMPLEXITY[$repo]} $repo"
+done | sort -n | cut -d' ' -f2))
+
+echo "Migration order (by complexity):"
+for repo in "${SORTED_REPOS[@]}"; do
+    echo "  $repo (${REPO_COMPLEXITY[$repo]} items)"
+done
 
 # Function to wait for rate limit reset
 wait_for_rate_limit() {
@@ -210,7 +268,8 @@ create_issues() {
                         local formatted_comment="$comment_body
 
 ---
-*Originally posted by @$comment_author on $comment_date*"
+*Originally posted by @$comment_author on $comment_date*
+*Migrated from $SOURCE_ORG/$repo_name*"
                         
                         # Wait for rate limit
                         wait_for_rate_limit "comment"
@@ -280,12 +339,13 @@ create_pull_requests() {
         local state=$(echo "$pr_json" | nix run nixpkgs#jq -- -r '.state')
         local number=$(echo "$pr_json" | nix run nixpkgs#jq -- -r '.number')
         
-        local pr_issue_body="**This was originally Pull Request #$number**
+        local pr_issue_body="**This was originally Pull Request #$number from $SOURCE_ORG/$repo_name**
 
 $body
 
 ---
 *Original PR state: $state*
+*Migrated from $SOURCE_ORG to $TARGET_ORG*
 *Note: This is a documentation of the original pull request, not a recreated PR*"
         
         echo "    Creating documentation issue for PR #$number: $title"
@@ -367,7 +427,7 @@ echo "$(date): Starting comprehensive migration" > "$LOG_FILE"
 MINUTE_START=$(date +%s)
 HOUR_START=$(date +%s)
 
-for repo in "${REPOS[@]}"; do
+for repo in "${SORTED_REPOS[@]}"; do
     # Check if repository already exists and skip entirely if it does
     if nix run nixpkgs#gh -- repo view "$TARGET_ORG/$repo" >/dev/null 2>&1; then
         echo ""
@@ -396,6 +456,10 @@ done
 echo ""
 echo "======================================="
 echo "MIGRATION COMPLETED!"
+echo "Source: $SOURCE_ORG"
+echo "Target: $TARGET_ORG"
 echo "All repositories have been migrated to $TARGET_ORG"
 echo "$(date): All migrations completed" >> "$LOG_FILE"
 echo "======================================="
+echo ""
+echo "View migrated repositories at: https://github.com/$TARGET_ORG"
