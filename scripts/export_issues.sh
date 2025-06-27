@@ -21,7 +21,7 @@ mkdir -p "$BACKUP_DIR"
 
 # Get list of all repositories in the organization
 echo "Discovering repositories in $ORG organization..."
-REPOS=($(nix run nixpkgs#gh -- repo list "$ORG" --limit 1000 --json name --jq '.[].name'))
+REPOS=($(gh -- repo list "$ORG" --limit 1000 --json name --jq '.[].name'))
 
 echo "Found ${#REPOS[@]} repositories to process"
 
@@ -31,7 +31,7 @@ for repo in "${REPOS[@]}"; do
     echo "Exporting issues from $ORG/$repo..."
     
     # Export issues using GitHub API
-    nix run nixpkgs#gh -- api graphql --paginate -f query="
+    gh -- api graphql --paginate -f query="
     query(\$owner: String!, \$repo: String!, \$cursor: String) {
       repository(owner: \$owner, name: \$repo) {
         issues(first: 100, after: \$cursor, orderBy: {field: CREATED_AT, direction: ASC}) {
@@ -78,8 +78,8 @@ for repo in "${REPOS[@]}"; do
     
     if [ $? -eq 0 ]; then
         # Handle both GraphQL structure and empty responses
-        if [ "$(nix run nixpkgs#jq -- 'type' "${repo}_issues.json")" = '"object"' ]; then
-            actual_count=$(cat "${repo}_issues.json" | nix run nixpkgs#jq -- '.data.repository.issues.nodes | length')
+        if [ "$(jq -- 'type' "${repo}_issues.json")" = '"object"' ]; then
+            actual_count=$(cat "${repo}_issues.json" | jq -- '.data.repository.issues.nodes | length')
         else
             actual_count=0
             echo "[]" > "${repo}_issues.json"

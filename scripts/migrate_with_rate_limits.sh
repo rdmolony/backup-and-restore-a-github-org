@@ -72,15 +72,15 @@ for repo in "${REPOS[@]}"; do
     
     # Count issues
     if [ -f "$ISSUES_DIR/${repo}_issues.json" ]; then
-        if [ "$(nix run nixpkgs#jq -- 'type' "$ISSUES_DIR/${repo}_issues.json")" = '"object"' ]; then
-            issues_count=$(nix run nixpkgs#jq -- '.data.repository.issues.nodes | length' "$ISSUES_DIR/${repo}_issues.json" 2>/dev/null || echo "0")
+        if [ "$(jq -- 'type' "$ISSUES_DIR/${repo}_issues.json")" = '"object"' ]; then
+            issues_count=$(jq -- '.data.repository.issues.nodes | length' "$ISSUES_DIR/${repo}_issues.json" 2>/dev/null || echo "0")
         fi
     fi
     
     # Count PRs
     if [ -f "$PULLS_DIR/${repo}_pull_requests.json" ]; then
-        if [ "$(nix run nixpkgs#jq -- 'type' "$PULLS_DIR/${repo}_pull_requests.json")" = '"object"' ]; then
-            prs_count=$(nix run nixpkgs#jq -- '.data.repository.pullRequests.nodes | length' "$PULLS_DIR/${repo}_pull_requests.json" 2>/dev/null || echo "0")
+        if [ "$(jq -- 'type' "$PULLS_DIR/${repo}_pull_requests.json")" = '"object"' ]; then
+            prs_count=$(jq -- '.data.repository.pullRequests.nodes | length' "$PULLS_DIR/${repo}_pull_requests.json" 2>/dev/null || echo "0")
         fi
     fi
     
@@ -157,13 +157,13 @@ create_repository() {
     echo "=== Creating repository: $TARGET_ORG/$repo_name ==="
     
     # Check if repository already exists
-    if nix run nixpkgs#gh -- repo view "$TARGET_ORG/$repo_name" >/dev/null 2>&1; then
+    if gh -- repo view "$TARGET_ORG/$repo_name" >/dev/null 2>&1; then
         echo "  ✓ Repository already exists, skipping creation and content push"
         return 2  # Special return code for "already exists"
     fi
     
     # Create the repository
-    if nix run nixpkgs#gh -- repo create "$TARGET_ORG/$repo_name" --private --description "Migrated from powerscope organization" --clone=false; then
+    if gh -- repo create "$TARGET_ORG/$repo_name" --private --description "Migrated from powerscope organization" --clone=false; then
         echo "  ✓ Repository created successfully"
     else
         echo "  ✗ Failed to create repository"
@@ -202,10 +202,10 @@ create_issues() {
     
     # Handle both GraphQL structure and empty array
     local issue_count
-    if [ "$(nix run nixpkgs#jq -- 'type' "$ISSUES_DIR/${repo_name}_issues.json")" = '"array"' ]; then
-        issue_count=$(nix run nixpkgs#jq -- 'length' "$ISSUES_DIR/${repo_name}_issues.json")
+    if [ "$(jq -- 'type' "$ISSUES_DIR/${repo_name}_issues.json")" = '"array"' ]; then
+        issue_count=$(jq -- 'length' "$ISSUES_DIR/${repo_name}_issues.json")
     else
-        issue_count=$(nix run nixpkgs#jq -- '.data.repository.issues.nodes | length' "$ISSUES_DIR/${repo_name}_issues.json")
+        issue_count=$(jq -- '.data.repository.issues.nodes | length' "$ISSUES_DIR/${repo_name}_issues.json")
     fi
     
     if [ "$issue_count" -eq 0 ]; then
@@ -221,18 +221,18 @@ create_issues() {
     fi
     
     local issue_index=0
-    if [ "$(nix run nixpkgs#jq -- 'type' "$ISSUES_DIR/${repo_name}_issues.json")" = '"array"' ]; then
+    if [ "$(jq -- 'type' "$ISSUES_DIR/${repo_name}_issues.json")" = '"array"' ]; then
         # Empty array, no issues to process
         return 0
     else
-        nix run nixpkgs#jq -- -c '.data.repository.issues.nodes[]' "$ISSUES_DIR/${repo_name}_issues.json" | while read -r issue_json; do
+        jq -- -c '.data.repository.issues.nodes[]' "$ISSUES_DIR/${repo_name}_issues.json" | while read -r issue_json; do
         issue_index=$((issue_index + 1))
         
         # Extract issue data
-        local title=$(echo "$issue_json" | nix run nixpkgs#jq -- -r '.title')
-        local body=$(echo "$issue_json" | nix run nixpkgs#jq -- -r '.body // ""')
-        local state=$(echo "$issue_json" | nix run nixpkgs#jq -- -r '.state')
-        local comments=$(echo "$issue_json" | nix run nixpkgs#jq -- -c '.comments.nodes[]' 2>/dev/null || echo "")
+        local title=$(echo "$issue_json" | jq -- -r '.title')
+        local body=$(echo "$issue_json" | jq -- -r '.body // ""')
+        local state=$(echo "$issue_json" | jq -- -r '.state')
+        local comments=$(echo "$issue_json" | jq -- -c '.comments.nodes[]' 2>/dev/null || echo "")
         
         echo "    [$issue_index/$issue_count] Creating: $title"
         
@@ -242,9 +242,9 @@ create_issues() {
         # Create the issue
         local issue_url=""
         if [ "$state" = "OPEN" ]; then
-            issue_url=$(nix run nixpkgs#gh -- issue create --repo "$TARGET_ORG/$repo_name" --title "$title" --body "$body" 2>/dev/null)
+            issue_url=$(gh -- issue create --repo "$TARGET_ORG/$repo_name" --title "$title" --body "$body" 2>/dev/null)
         else
-            issue_url=$(nix run nixpkgs#gh -- issue create --repo "$TARGET_ORG/$repo_name" --title "$title" --body "$body" 2>/dev/null)
+            issue_url=$(gh -- issue create --repo "$TARGET_ORG/$repo_name" --title "$title" --body "$body" 2>/dev/null)
         fi
         
         if [ $? -eq 0 ]; then
@@ -261,9 +261,9 @@ create_issues() {
                 
                 echo "$comments" | while read -r comment_json; do
                     if [ -n "$comment_json" ]; then
-                        local comment_body=$(echo "$comment_json" | nix run nixpkgs#jq -- -r '.body')
-                        local comment_author=$(echo "$comment_json" | nix run nixpkgs#jq -- -r '.author.login')
-                        local comment_date=$(echo "$comment_json" | nix run nixpkgs#jq -- -r '.createdAt')
+                        local comment_body=$(echo "$comment_json" | jq -- -r '.body')
+                        local comment_author=$(echo "$comment_json" | jq -- -r '.author.login')
+                        local comment_date=$(echo "$comment_json" | jq -- -r '.createdAt')
                         
                         local formatted_comment="$comment_body
 
@@ -275,7 +275,7 @@ create_issues() {
                         wait_for_rate_limit "comment"
                         
                         # Add the comment
-                        if nix run nixpkgs#gh -- issue comment "$issue_number" --repo "$TARGET_ORG/$repo_name" --body "$formatted_comment" >/dev/null 2>&1; then
+                        if gh -- issue comment "$issue_number" --repo "$TARGET_ORG/$repo_name" --body "$formatted_comment" >/dev/null 2>&1; then
                             COMMENTS_PER_MINUTE=$((COMMENTS_PER_MINUTE + 1))
                             COMMENTS_THIS_HOUR=$((COMMENTS_THIS_HOUR + 1))
                             echo -n "."
@@ -290,7 +290,7 @@ create_issues() {
             # Close issue if needed
             if [ "$state" = "CLOSED" ]; then
                 wait_for_rate_limit "issue"
-                nix run nixpkgs#gh -- issue close "$issue_number" --repo "$TARGET_ORG/$repo_name" >/dev/null 2>&1
+                gh -- issue close "$issue_number" --repo "$TARGET_ORG/$repo_name" >/dev/null 2>&1
                 ISSUES_PER_MINUTE=$((ISSUES_PER_MINUTE + 1))
                 ISSUES_THIS_HOUR=$((ISSUES_THIS_HOUR + 1))
                 echo "      ✓ Closed issue #$issue_number"
@@ -315,10 +315,10 @@ create_pull_requests() {
     
     # Handle both GraphQL structure and empty array
     local pr_count
-    if [ "$(nix run nixpkgs#jq -- 'type' "$PULLS_DIR/${repo_name}_pull_requests.json")" = '"array"' ]; then
-        pr_count=$(nix run nixpkgs#jq -- 'length' "$PULLS_DIR/${repo_name}_pull_requests.json")
+    if [ "$(jq -- 'type' "$PULLS_DIR/${repo_name}_pull_requests.json")" = '"array"' ]; then
+        pr_count=$(jq -- 'length' "$PULLS_DIR/${repo_name}_pull_requests.json")
     else
-        pr_count=$(nix run nixpkgs#jq -- '.data.repository.pullRequests.nodes | length' "$PULLS_DIR/${repo_name}_pull_requests.json")
+        pr_count=$(jq -- '.data.repository.pullRequests.nodes | length' "$PULLS_DIR/${repo_name}_pull_requests.json")
     fi
     
     if [ "$pr_count" -eq 0 ]; then
@@ -329,15 +329,15 @@ create_pull_requests() {
     echo "    Found $pr_count pull requests (will be documented as issues)"
     
     # Since we can't recreate PRs exactly, create issues documenting them
-    if [ "$(nix run nixpkgs#jq -- 'type' "$PULLS_DIR/${repo_name}_pull_requests.json")" = '"array"' ]; then
+    if [ "$(jq -- 'type' "$PULLS_DIR/${repo_name}_pull_requests.json")" = '"array"' ]; then
         # Empty array, no PRs to process
         return 0
     else
-        nix run nixpkgs#jq -- -c '.data.repository.pullRequests.nodes[]' "$PULLS_DIR/${repo_name}_pull_requests.json" | while read -r pr_json; do
-        local title=$(echo "$pr_json" | nix run nixpkgs#jq -- -r '.title')
-        local body=$(echo "$pr_json" | nix run nixpkgs#jq -- -r '.body // ""')
-        local state=$(echo "$pr_json" | nix run nixpkgs#jq -- -r '.state')
-        local number=$(echo "$pr_json" | nix run nixpkgs#jq -- -r '.number')
+        jq -- -c '.data.repository.pullRequests.nodes[]' "$PULLS_DIR/${repo_name}_pull_requests.json" | while read -r pr_json; do
+        local title=$(echo "$pr_json" | jq -- -r '.title')
+        local body=$(echo "$pr_json" | jq -- -r '.body // ""')
+        local state=$(echo "$pr_json" | jq -- -r '.state')
+        local number=$(echo "$pr_json" | jq -- -r '.number')
         
         local pr_issue_body="**This was originally Pull Request #$number from $SOURCE_ORG/$repo_name**
 
@@ -353,7 +353,7 @@ $body
         wait_for_rate_limit "issue"
         
         # Create issue to document the PR
-        local issue_url=$(nix run nixpkgs#gh -- issue create --repo "$TARGET_ORG/$repo_name" --title "[PR] $title" --body "$pr_issue_body" 2>/dev/null)
+        local issue_url=$(gh -- issue create --repo "$TARGET_ORG/$repo_name" --title "[PR] $title" --body "$pr_issue_body" 2>/dev/null)
         
         if [ $? -eq 0 ]; then
             ISSUES_PER_MINUTE=$((ISSUES_PER_MINUTE + 1))
@@ -364,7 +364,7 @@ $body
             
             # Close immediately since it's just documentation
             wait_for_rate_limit "issue"
-            nix run nixpkgs#gh -- issue close "$issue_number" --repo "$TARGET_ORG/$repo_name" >/dev/null 2>&1
+            gh -- issue close "$issue_number" --repo "$TARGET_ORG/$repo_name" >/dev/null 2>&1
             ISSUES_PER_MINUTE=$((ISSUES_PER_MINUTE + 1))
             ISSUES_THIS_HOUR=$((ISSUES_THIS_HOUR + 1))
             echo "      ✓ Closed documentation issue #$issue_number"
@@ -429,7 +429,7 @@ HOUR_START=$(date +%s)
 
 for repo in "${SORTED_REPOS[@]}"; do
     # Check if repository already exists and skip entirely if it does
-    if nix run nixpkgs#gh -- repo view "$TARGET_ORG/$repo" >/dev/null 2>&1; then
+    if gh -- repo view "$TARGET_ORG/$repo" >/dev/null 2>&1; then
         echo ""
         echo "======================================="
         echo "SKIPPING: $repo (already exists)"

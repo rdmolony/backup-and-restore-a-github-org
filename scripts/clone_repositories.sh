@@ -21,7 +21,7 @@ mkdir -p "$BACKUP_DIR"
 
 # Get list of all repositories in the organization
 echo "Discovering repositories in $ORG organization..."
-REPOS=($(nix run nixpkgs#gh -- repo list "$ORG" --limit 1000 --json name --jq '.[].name'))
+REPOS=($(gh -- repo list "$ORG" --limit 1000 --json name --jq '.[].name'))
 
 echo "Found ${#REPOS[@]} repositories to clone"
 
@@ -32,7 +32,7 @@ for repo in "${REPOS[@]}"; do
     if [ -d "$repo" ]; then
         echo "  Repository $repo already exists, skipping..."
     else
-        nix run nixpkgs#gh -- repo clone "$ORG/$repo" -- --recurse-submodules
+        gh -- repo clone "$ORG/$repo" -- --recurse-submodules
         if [ $? -eq 0 ]; then
             echo "  ✓ Successfully cloned $repo"
         else
