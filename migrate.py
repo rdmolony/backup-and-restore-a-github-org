@@ -36,7 +36,13 @@ Examples:
     --issues-per-min 10 \\
     --comments-per-min 15
 
+  # Migrate only issues, skip repository content
+  python migrate.py powerscope thalora-dev $GITHUB_TOKEN --no-content
+
 Features:
+  - Migrates repository content (code, history, branches, tags)
+  - Migrates issues with original numbering (creates placeholders for gaps)
+  - Migrates comments with proper author attribution
   - Resumes from exactly where it left off (repository, issue, or comment level)
   - Respects GitHub API rate limits
   - Thread-safe state management

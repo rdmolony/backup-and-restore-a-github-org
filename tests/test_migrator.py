@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, patch, MagicMock
 import tempfile
 import os
+import subprocess
 from github_migrator.migrator import GitHubMigrator
 from github_migrator.github_client import GitHubAPIError
 
@@ -72,12 +73,14 @@ class TestGitHubMigrator(unittest.TestCase):
         self.assertTrue(result)
         self.mock_client.create_repository.assert_not_called()
     
-    def test_migrate_repository_success(self):
+    @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
+    def test_migrate_repository_success(self, mock_migrate_content):
         """Test successful repository migration."""
         # Setup mocks
         self.mock_state.is_repo_completed.return_value = False
         self.mock_client.create_repository.return_value = {"name": "test_repo"}
         self.mock_client.get_issues.return_value = []
+        mock_migrate_content.return_value = True
         
         result = self.migrator.migrate_repository("test_repo")
         
@@ -95,11 +98,13 @@ class TestGitHubMigrator(unittest.TestCase):
         self.assertFalse(result)
         self.mock_state.mark_repo_completed.assert_not_called()
     
-    def test_migrate_repository_already_exists(self):
+    @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
+    def test_migrate_repository_already_exists(self, mock_migrate_content):
         """Test handling repository that already exists (422 error)."""
         self.mock_state.is_repo_completed.return_value = False
         self.mock_client.create_repository.side_effect = GitHubAPIError("GitHub API error 422: Unprocessable Entity - Repository creation failed.")
         self.mock_client.get_issues.return_value = []
+        mock_migrate_content.return_value = True
         
         result = self.migrator.migrate_repository("test_repo")
         
@@ -150,7 +155,8 @@ class TestGitHubMigrator(unittest.TestCase):
         # Check the body argument (which is the 4th positional argument)
         self.assertIn("Comment 3", call_args[0][3])  # body is 4th positional argument
     
-    def test_full_migration_process(self):
+    @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
+    def test_full_migration_process(self, mock_migrate_content):
         """Test full migration process integration."""
         # Mock repositories
         self.mock_client.get_repositories.return_value = [
@@ -178,6 +184,9 @@ class TestGitHubMigrator(unittest.TestCase):
             'issues_limit': 20,
             'comments_limit': 20
         }
+        
+        # Mock content migration
+        mock_migrate_content.return_value = True
         
         result = self.migrator.migrate_organization()
         
@@ -348,6 +357,151 @@ class TestGitHubMigrator(unittest.TestCase):
         self.mock_client.create_issue.assert_called_once()
         self.mock_client.close_issue.assert_called_once_with("target_org", "test_repo", 123)
         self.mock_state.mark_issue_completed.assert_called_once_with("test_repo", 1)
+    
+    @patch('subprocess.run')
+    @patch('os.chdir')
+    @patch('os.getcwd')
+    def test_migrate_repository_content_success(self, mock_getcwd, mock_chdir, mock_subprocess):
+        """Test successful repository content migration."""
+        mock_getcwd.return_value = "/original/dir"
+        
+        # Mock successful git operations
+        mock_subprocess.side_effect = [
+            Mock(returncode=0, stderr=""),  # git clone
+            Mock(returncode=0, stderr=""),  # git remote add
+            Mock(returncode=0, stderr="")   # git push
+        ]
+        
+        result = self.migrator.migrate_repository_content("test_repo")
+        
+        self.assertTrue(result)
+        self.assertEqual(mock_subprocess.call_count, 3)
+        
+        # Check git clone command
+        clone_call = mock_subprocess.call_args_list[0]
+        self.assertIn('git', clone_call[0][0])
+        self.assertIn('clone', clone_call[0][0])
+        self.assertIn('--mirror', clone_call[0][0])
+        
+        # Check git remote add command
+        remote_call = mock_subprocess.call_args_list[1]
+        self.assertIn('git', remote_call[0][0])
+        self.assertIn('remote', remote_call[0][0])
+        self.assertIn('add', remote_call[0][0])
+        self.assertIn('target', remote_call[0][0])
+        
+        # Check git push command
+        push_call = mock_subprocess.call_args_list[2]
+        self.assertIn('git', push_call[0][0])
+        self.assertIn('push', push_call[0][0])
+        self.assertIn('--mirror', push_call[0][0])
+    
+    @patch('subprocess.run')
+    def test_migrate_repository_content_clone_failure(self, mock_subprocess):
+        """Test repository content migration when clone fails."""
+        # Mock failed git clone
+        mock_subprocess.return_value = Mock(returncode=1, stderr="Clone failed")
+        
+        result = self.migrator.migrate_repository_content("test_repo")
+        
+        self.assertFalse(result)
+        # Should only call git clone, not remote add or push
+        self.assertEqual(mock_subprocess.call_count, 1)
+    
+    @patch('subprocess.run')
+    @patch('os.chdir')
+    @patch('os.getcwd')
+    def test_migrate_repository_content_push_failure(self, mock_getcwd, mock_chdir, mock_subprocess):
+        """Test repository content migration when push fails."""
+        mock_getcwd.return_value = "/original/dir"
+        
+        # Mock successful clone and remote add, but failed push
+        mock_subprocess.side_effect = [
+            Mock(returncode=0, stderr=""),  # git clone
+            Mock(returncode=0, stderr=""),  # git remote add
+            Mock(returncode=1, stderr="Push failed")   # git push
+        ]
+        
+        result = self.migrator.migrate_repository_content("test_repo")
+        
+        self.assertFalse(result)
+        self.assertEqual(mock_subprocess.call_count, 3)
+    
+    @patch('subprocess.run')
+    def test_migrate_repository_content_timeout(self, mock_subprocess):
+        """Test repository content migration timeout handling."""
+        # Mock timeout
+        mock_subprocess.side_effect = subprocess.TimeoutExpired("git", 300)
+        
+        result = self.migrator.migrate_repository_content("test_repo")
+        
+        self.assertFalse(result)
+    
+    def test_migrate_repository_content_disabled(self):
+        """Test that repository content migration can be disabled."""
+        # Create migrator with content migration disabled
+        with patch('github_migrator.migrator.GitHubClient') as mock_client_class:
+            with patch('github_migrator.migrator.StateManager') as mock_state_class:
+                with patch('github_migrator.migrator.RateLimiter') as mock_limiter_class:
+                    mock_client_class.return_value = Mock()
+                    mock_state_class.return_value = Mock()
+                    mock_limiter_class.return_value = Mock()
+                    
+                    migrator = GitHubMigrator(
+                        source_org="source_org",
+                        target_org="target_org", 
+                        github_token="test_token",
+                        state_file=self.temp_state_file.name,
+                        migrate_content=False
+                    )
+                    
+                    self.assertFalse(migrator.migrate_content)
+    
+    @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
+    def test_migrate_repository_skips_content_when_disabled(self, mock_migrate_content):
+        """Test that migrate_repository skips content migration when disabled."""
+        # Setup mocks for regular migration
+        self.mock_state.is_repo_completed.return_value = False
+        self.mock_client.create_repository.return_value = {"name": "test_repo"}
+        self.mock_client.get_issues.return_value = []
+        
+        # Create migrator with content migration disabled
+        self.migrator.migrate_content = False
+        
+        result = self.migrator.migrate_repository("test_repo")
+        
+        self.assertTrue(result)
+        # migrate_repository_content should not be called
+        mock_migrate_content.assert_not_called()
+        self.mock_state.mark_repo_completed.assert_called_once_with("test_repo")
+    
+    def test_run_git_command_success(self):
+        """Test successful git command execution."""
+        with patch('subprocess.run') as mock_subprocess:
+            mock_subprocess.return_value = Mock(
+                returncode=0, 
+                stdout="Success output",
+                stderr=""
+            )
+            
+            success, output = self.migrator._run_git_command(['status'])
+            
+            self.assertTrue(success)
+            self.assertEqual(output, "Success output")
+    
+    def test_run_git_command_failure(self):
+        """Test failed git command execution."""
+        with patch('subprocess.run') as mock_subprocess:
+            mock_subprocess.return_value = Mock(
+                returncode=1, 
+                stdout="",
+                stderr="Error output"
+            )
+            
+            success, output = self.migrator._run_git_command(['status'])
+            
+            self.assertFalse(success)
+            self.assertEqual(output, "Error output")
 
 
 if __name__ == '__main__':
