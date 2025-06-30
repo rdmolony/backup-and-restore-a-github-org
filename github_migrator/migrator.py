@@ -276,6 +276,11 @@ class GitHubMigrator:
                         logger.error(f"Failed to add target remote: {result.stderr}")
                         return False
                     
+                    # Check if Git LFS is configured and install if needed
+                    if os.path.exists('.gitattributes'):
+                        logger.info("Git LFS configuration detected, ensuring LFS is installed...")
+                        subprocess.run(['git', 'lfs', 'install'], capture_output=True, text=True)
+                    
                     # Push all branches and tags to target
                     logger.info(f"Pushing all content to target repository {self.target_org}/{repo_name} (this may take a while)")
                     
