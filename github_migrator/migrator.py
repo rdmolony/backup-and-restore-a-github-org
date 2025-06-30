@@ -289,9 +289,34 @@ class GitHubMigrator:
                         logger.error(f"Failed to add target remote: {result.stderr}")
                         return False
                     
-                    # Check if Git LFS is configured and install if needed
-                    if os.path.exists('.gitattributes'):
-                        logger.info("Git LFS configuration detected, ensuring LFS is installed...")
+                    # Check for large files and setup Git LFS if needed
+                    logger.info("Checking for files over 50MB that need Git LFS...")
+                    
+                    # Find files larger than 50MB
+                    result = subprocess.run([
+                        'find', '.', '-size', '+50M', '-type', 'f', '-not', '-path', './.git/*'
+                    ], capture_output=True, text=True)
+                    
+                    large_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+                    
+                    if large_files:
+                        logger.info(f"Found {len(large_files)} files over 50MB, setting up Git LFS...")
+                        
+                        # Initialize Git LFS
+                        subprocess.run(['git', 'lfs', 'install'], capture_output=True, text=True)
+                        
+                        # Track each large file individually
+                        for file in large_files:
+                            logger.info(f"Adding large file to LFS: {file}")
+                            subprocess.run(['git', 'lfs', 'track', file], capture_output=True, text=True)
+                        
+                        # Add and commit .gitattributes
+                        if os.path.exists('.gitattributes'):
+                            subprocess.run(['git', 'add', '.gitattributes'], capture_output=True, text=True)
+                            subprocess.run(['git', 'commit', '-m', 'Add Git LFS tracking for large files'], capture_output=True, text=True)
+                            logger.info("Committed Git LFS configuration")
+                    elif os.path.exists('.gitattributes'):
+                        logger.info("Existing Git LFS configuration detected, ensuring LFS is installed...")
                         subprocess.run(['git', 'lfs', 'install'], capture_output=True, text=True)
                     
                     # Push all branches and tags to target
