@@ -41,9 +41,25 @@ class StateManager:
         """Ensure repository structure exists in state."""
         if repo_name not in state["repositories"]:
             state["repositories"][repo_name] = {
-                "completed": False,
+                "content_completed": False,
+                "issues_completed": False,
                 "issues": {}
             }
+        else:
+            # Ensure new fields exist
+            repo_data = state["repositories"][repo_name]
+            if "content_completed" not in repo_data:
+                # Assume no content has been migrated
+                repo_data["content_completed"] = False
+            if "issues_completed" not in repo_data:
+                # Infer issues completion from existing issue data
+                issues_data = repo_data.get("issues", {})
+                has_completed_issues = any(
+                    issue.get("completed", False) for issue in issues_data.values()
+                )
+                repo_data["issues_completed"] = has_completed_issues
+            if "issues" not in repo_data:
+                repo_data["issues"] = {}
     
     def _ensure_issue_exists(self, state: Dict[str, Any], repo_name: str, issue_number: int):
         """Ensure issue structure exists in state."""
@@ -61,14 +77,54 @@ class StateManager:
             state = self._read_state()
             if repo_name not in state["repositories"]:
                 return False
-            return state["repositories"][repo_name].get("completed", False)
+            self._ensure_repo_exists(state, repo_name)
+            repo_data = state["repositories"][repo_name]
+            return (repo_data.get("content_completed", False) and 
+                    repo_data.get("issues_completed", False))
+    
+    def is_content_completed(self, repo_name: str) -> bool:
+        """Check if repository content migration is completed."""
+        with self._lock:
+            state = self._read_state()
+            if repo_name not in state["repositories"]:
+                return False
+            self._ensure_repo_exists(state, repo_name)
+            self._write_state(state)  # Save the updated structure
+            return state["repositories"][repo_name].get("content_completed", False)
+    
+    def is_issues_completed(self, repo_name: str) -> bool:
+        """Check if repository issues migration is completed."""
+        with self._lock:
+            state = self._read_state()
+            if repo_name not in state["repositories"]:
+                return False
+            self._ensure_repo_exists(state, repo_name)
+            self._write_state(state)  # Save the updated structure
+            return state["repositories"][repo_name].get("issues_completed", False)
     
     def mark_repo_completed(self, repo_name: str):
-        """Mark repository as completed."""
+        """Mark repository as completed (both content and issues)."""
         with self._lock:
             state = self._read_state()
             self._ensure_repo_exists(state, repo_name)
-            state["repositories"][repo_name]["completed"] = True
+            state["repositories"][repo_name]["content_completed"] = True
+            state["repositories"][repo_name]["issues_completed"] = True
+            self._write_state(state)
+    
+    def mark_content_completed(self, repo_name: str):
+        """Mark repository content migration as completed."""
+        with self._lock:
+            state = self._read_state()
+            self._ensure_repo_exists(state, repo_name)
+            state["repositories"][repo_name]["content_completed"] = True
+            self._write_state(state)
+    
+    def mark_issues_completed(self, repo_name: str):
+        """Mark repository issues migration as completed."""
+        with self._lock:
+            state = self._read_state()
+            self._ensure_repo_exists(state, repo_name)
+            state["repositories"][repo_name]["issues_completed"] = True
             self._write_state(state)
     
     def is_issue_completed(self, repo_name: str, issue_number: int) -> bool:

@@ -40,13 +40,23 @@ class GitHubMigrator:
         try:
             all_repos = self.client.get_repositories(self.source_org)
             
-            # Filter out already completed repositories
+            # Filter out repositories that don't need any migration
             repos_to_migrate = []
             for repo in all_repos:
-                if not self.state.is_repo_completed(repo["name"]):
+                repo_name = repo["name"]
+                content_needed = self.migrate_content and not self.state.is_content_completed(repo_name)
+                issues_needed = not self.state.is_issues_completed(repo_name)
+                
+                if content_needed or issues_needed:
                     repos_to_migrate.append(repo)
+                    if content_needed and issues_needed:
+                        logger.info(f"Repository {repo_name} needs both content and issues migration")
+                    elif content_needed:
+                        logger.info(f"Repository {repo_name} needs content migration")
+                    elif issues_needed:
+                        logger.info(f"Repository {repo_name} needs issues migration")
                 else:
-                    logger.info(f"Skipping {repo['name']} - already completed")
+                    logger.info(f"Skipping {repo_name} - fully completed")
             
             logger.info(f"Found {len(repos_to_migrate)} repositories to migrate")
             return repos_to_migrate
@@ -59,8 +69,11 @@ class GitHubMigrator:
         """Migrate a single repository including issues and comments."""
         logger.info(f"Starting migration of repository: {repo_name}")
         
-        # Check if already completed
-        if self.state.is_repo_completed(repo_name):
+        # Check if there's anything to migrate
+        content_needed = self.migrate_content and not self.state.is_content_completed(repo_name)
+        issues_needed = not self.state.is_issues_completed(repo_name)
+        
+        if not content_needed and not issues_needed:
             logger.info(f"Repository {repo_name} already completed, skipping")
             return True
         
@@ -81,28 +94,40 @@ class GitHubMigrator:
                 else:
                     raise e
             
-            # Migrate repository content (code, history) first if enabled
-            if self.migrate_content:
+            # Check what needs to be migrated
+            content_needed = self.migrate_content and not self.state.is_content_completed(repo_name)
+            issues_needed = not self.state.is_issues_completed(repo_name)
+            
+            # Migrate repository content if needed
+            if content_needed:
                 logger.info(f"Starting repository content migration for {repo_name}...")
-                if not self.migrate_repository_content(repo_name):
-                    logger.warning(f"Failed to migrate repository content for {repo_name}, but continuing")
-                    # Don't fail the entire migration for content issues
-                else:
+                if self.migrate_repository_content(repo_name):
                     logger.info(f"Repository content migration completed successfully for {repo_name}")
+                    self.state.mark_content_completed(repo_name)
+                else:
+                    logger.warning(f"Failed to migrate repository content for {repo_name}")
+                    return False
+            elif self.migrate_content:
+                logger.info(f"Repository content already migrated for {repo_name}, skipping")
             else:
                 logger.info(f"Repository content migration disabled, skipping for {repo_name}")
             
-            # Migrate issues after content
-            logger.info(f"Getting issues for {repo_name}")
-            issues = self.client.get_issues(self.source_org, repo_name)
-            logger.info(f"Found {len(issues)} issues to migrate")
+            # Migrate issues if needed
+            if issues_needed:
+                logger.info(f"Getting issues for {repo_name}")
+                issues = self.client.get_issues(self.source_org, repo_name)
+                logger.info(f"Found {len(issues)} issues to migrate")
+                
+                if self.migrate_issues(repo_name, issues):
+                    logger.info(f"Issues migration completed successfully for {repo_name}")
+                    self.state.mark_issues_completed(repo_name)
+                else:
+                    logger.error(f"Failed to migrate issues for {repo_name}")
+                    return False
+            else:
+                logger.info(f"Issues already migrated for {repo_name}, skipping")
             
-            if not self.migrate_issues(repo_name, issues):
-                return False
-            
-            # Mark repository as completed
-            self.state.mark_repo_completed(repo_name)
-            logger.info(f"Repository {repo_name} migration completed")
+            logger.info(f"Repository {repo_name} migration completed successfully")
             return True
             
         except GitHubAPIError as e:
@@ -260,7 +285,7 @@ class GitHubMigrator:
                     logger.info(f"Cloning source repository {self.source_org}/{repo_name} (this may take a while for large repos)")
                     
                     result = subprocess.run([
-                        'git', 'clone', '--mirror', source_url, repo_dir
+                        'git', 'clone', source_url, repo_dir
                     ], capture_output=True, text=True, timeout=300)
                     
                     if result.returncode != 0:
@@ -292,15 +317,23 @@ class GitHubMigrator:
                     # Check for large files and setup Git LFS if needed
                     logger.info("Checking for files over 50MB that need Git LFS...")
                     
-                    # Find files larger than 50MB
+                    # Use git ls-files to only check tracked files, excluding git internal files
                     result = subprocess.run([
-                        'find', '.', '-size', '+50M', '-type', 'f', '-not', '-path', './.git/*'
+                        'git', 'ls-files'
                     ], capture_output=True, text=True)
                     
-                    large_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+                    tracked_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+                    large_files = []
+                    
+                    # Check size of each tracked file
+                    for file in tracked_files:
+                        if os.path.exists(file):
+                            size = os.path.getsize(file)
+                            if size > 50 * 1024 * 1024:  # 50MB
+                                large_files.append(file)
                     
                     if large_files:
-                        logger.info(f"Found {len(large_files)} files over 50MB, setting up Git LFS...")
+                        logger.info(f"Found {len(large_files)} tracked files over 50MB, setting up Git LFS...")
                         
                         # Initialize Git LFS
                         subprocess.run(['git', 'lfs', 'install'], capture_output=True, text=True)
@@ -318,13 +351,28 @@ class GitHubMigrator:
                     elif os.path.exists('.gitattributes'):
                         logger.info("Existing Git LFS configuration detected, ensuring LFS is installed...")
                         subprocess.run(['git', 'lfs', 'install'], capture_output=True, text=True)
+                        
+                        # Fetch LFS objects from source first
+                        logger.info("Fetching Git LFS objects from source...")
+                        subprocess.run(['git', 'lfs', 'fetch', 'origin', '--all'], capture_output=True, text=True, timeout=600)
+                        
+                        # Push LFS objects to target
+                        logger.info("Pushing Git LFS objects to target...")
+                        lfs_push_result = subprocess.run([
+                            'git', 'lfs', 'push', 'target', '--all'
+                        ], capture_output=True, text=True, timeout=600)
+                        if lfs_push_result.returncode != 0:
+                            logger.warning(f"Failed to push LFS objects: {lfs_push_result.stderr}")
                     
                     # Push all branches and tags to target
                     logger.info(f"Pushing all content to target repository {self.target_org}/{repo_name} (this may take a while)")
                     
-                    # Push all refs (branches, tags, etc.)
+                    # Push all branches
+                    subprocess.run(['git', 'push', 'target', '--all'], capture_output=True, text=True, timeout=600)
+                    
+                    # Push all tags
                     result = subprocess.run([
-                        'git', 'push', 'target', '--mirror'
+                        'git', 'push', 'target', '--tags'
                     ], capture_output=True, text=True, timeout=600)
                     
                     if result.returncode != 0:
