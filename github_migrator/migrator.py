@@ -339,7 +339,9 @@ class GitHubMigrator:
                             logger.error("  gh auth token")
                             logger.error("")
                             logger.error("And re-run the migration with the new token.")
-                            return False
+                            logger.error("")
+                            logger.error("❌ MIGRATION STOPPED - Fix token permissions and re-run")
+                            raise Exception("Missing workflow scope in GitHub token")
                         else:
                             logger.error(f"Failed to push to target repository: {result.stderr}")
                             return False
