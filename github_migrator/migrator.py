@@ -247,17 +247,30 @@ class GitHubMigrator:
             repo_dir = os.path.join(temp_dir, repo_name)
             
             try:
-                # Clone source repository
-                source_url = f"https://{self.github_token}@github.com/{self.source_org}/{repo_name}.git"
-                logger.info(f"Cloning source repository {self.source_org}/{repo_name} (this may take a while for large repos)")
+                # Check if repo is already cloned locally (for resumability)
+                cached_repo_dir = os.path.join(os.path.expanduser("~"), ".github_migrator_cache", f"{self.source_org}_{repo_name}")
                 
-                result = subprocess.run([
-                    'git', 'clone', '--mirror', source_url, repo_dir
-                ], capture_output=True, text=True, timeout=300)
-                
-                if result.returncode != 0:
-                    logger.error(f"Failed to clone source repository: {result.stderr}")
-                    return False
+                if os.path.exists(cached_repo_dir) and os.path.exists(os.path.join(cached_repo_dir, "HEAD")):
+                    logger.info(f"Using cached repository from {cached_repo_dir}")
+                    # Copy cached repo to temp dir
+                    subprocess.run(['cp', '-r', cached_repo_dir, repo_dir], capture_output=True, text=True)
+                else:
+                    # Clone source repository
+                    source_url = f"https://{self.github_token}@github.com/{self.source_org}/{repo_name}.git"
+                    logger.info(f"Cloning source repository {self.source_org}/{repo_name} (this may take a while for large repos)")
+                    
+                    result = subprocess.run([
+                        'git', 'clone', '--mirror', source_url, repo_dir
+                    ], capture_output=True, text=True, timeout=300)
+                    
+                    if result.returncode != 0:
+                        logger.error(f"Failed to clone source repository: {result.stderr}")
+                        return False
+                    
+                    # Cache the cloned repo for future use
+                    os.makedirs(os.path.dirname(cached_repo_dir), exist_ok=True)
+                    subprocess.run(['cp', '-r', repo_dir, cached_repo_dir], capture_output=True, text=True)
+                    logger.info(f"Cached repository to {cached_repo_dir}")
                 
                 # Change to repository directory
                 original_dir = os.getcwd()
