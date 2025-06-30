@@ -328,8 +328,21 @@ class GitHubMigrator:
                     ], capture_output=True, text=True, timeout=600)
                     
                     if result.returncode != 0:
-                        logger.error(f"Failed to push to target repository: {result.stderr}")
-                        return False
+                        if 'refusing to allow an OAuth App to create or update workflow' in result.stderr and 'without `workflow` scope' in result.stderr:
+                            logger.error("❌ MISSING GITHUB TOKEN PERMISSIONS")
+                            logger.error("Your GitHub token is missing the 'workflow' scope required to push GitHub Actions workflows.")
+                            logger.error("")
+                            logger.error("To fix this, run:")
+                            logger.error("  gh auth refresh --scopes repo,workflow")
+                            logger.error("")
+                            logger.error("Then get your new token with:")
+                            logger.error("  gh auth token")
+                            logger.error("")
+                            logger.error("And re-run the migration with the new token.")
+                            return False
+                        else:
+                            logger.error(f"Failed to push to target repository: {result.stderr}")
+                            return False
                     
                     logger.info(f"Repository content migration completed for {repo_name}")
                     return True
