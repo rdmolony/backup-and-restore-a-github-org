@@ -69,13 +69,82 @@ class TestStateManager(unittest.TestCase):
         self.assertTrue(new_state_manager.is_repo_completed("test_repo"))
         self.assertEqual(new_state_manager.get_comment_progress("test_repo", 1), 3)
     
+    def test_content_completion_tracking(self):
+        """Test content completion tracking."""
+        # Initially not completed
+        self.assertFalse(self.state_manager.is_content_completed("test_repo"))
+        
+        # Mark as completed
+        self.state_manager.mark_content_completed("test_repo")
+        self.assertTrue(self.state_manager.is_content_completed("test_repo"))
+    
+    def test_issues_completion_tracking(self):
+        """Test issues completion tracking."""
+        # Initially not completed
+        self.assertFalse(self.state_manager.is_issues_completed("test_repo"))
+        
+        # Mark as completed
+        self.state_manager.mark_issues_completed("test_repo")
+        self.assertTrue(self.state_manager.is_issues_completed("test_repo"))
+    
+    def test_repo_completion_requires_both_content_and_issues(self):
+        """Test that repo completion requires both content and issues to be complete."""
+        # Initially not completed
+        self.assertFalse(self.state_manager.is_repo_completed("test_repo"))
+        
+        # Only content completed - not fully complete
+        self.state_manager.mark_content_completed("test_repo")
+        self.assertFalse(self.state_manager.is_repo_completed("test_repo"))
+        
+        # Only issues completed - not fully complete  
+        self.state_manager.mark_issues_completed("test_repo")
+        self.assertTrue(self.state_manager.is_repo_completed("test_repo"))
+    
+    def test_mark_repo_completed_marks_both_parts(self):
+        """Test that mark_repo_completed marks both content and issues as complete."""
+        self.state_manager.mark_repo_completed("test_repo")
+        
+        self.assertTrue(self.state_manager.is_content_completed("test_repo"))
+        self.assertTrue(self.state_manager.is_issues_completed("test_repo"))
+        self.assertTrue(self.state_manager.is_repo_completed("test_repo"))
+    
+    def test_state_migration_for_existing_repo_with_issues(self):
+        """Test state migration for existing repo that has completed issues."""
+        # Manually create old-style state with just issues data
+        state = self.state_manager._read_state()
+        state["repositories"]["old_repo"] = {
+            "issues": {
+                "1": {"completed": True, "comments_completed": 5},
+                "2": {"completed": True, "comments_completed": 0}
+            }
+        }
+        self.state_manager._write_state(state)
+        
+        # Check that issues completion is inferred from issue data
+        self.assertTrue(self.state_manager.is_issues_completed("old_repo"))
+        # Check that content completion defaults to False
+        self.assertFalse(self.state_manager.is_content_completed("old_repo"))
+        
+    def test_state_migration_for_existing_repo_with_no_issues(self):
+        """Test state migration for existing repo with no issues."""
+        # Manually create old-style state with empty issues
+        state = self.state_manager._read_state()
+        state["repositories"]["empty_repo"] = {"issues": {}}
+        self.state_manager._write_state(state)
+        
+        # Check that issues completion is False (no completed issues)
+        self.assertFalse(self.state_manager.is_issues_completed("empty_repo"))
+        # Check that content completion defaults to False
+        self.assertFalse(self.state_manager.is_content_completed("empty_repo"))
+    
     def test_get_completed_repositories(self):
         """Test getting list of completed repositories."""
         self.state_manager.mark_repo_completed("repo1")
-        self.state_manager.mark_repo_completed("repo2")
+        self.state_manager.mark_content_completed("repo2")  # Only content, not complete
+        self.state_manager.mark_issues_completed("repo3")   # Only issues, not complete
         
         completed = self.state_manager.get_completed_repositories()
-        self.assertEqual(set(completed), {"repo1", "repo2"})
+        self.assertEqual(set(completed), {"repo1"})
     
     def test_get_completed_issues(self):
         """Test getting list of completed issues for a repository."""

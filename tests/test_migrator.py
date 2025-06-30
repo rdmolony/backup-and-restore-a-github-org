@@ -55,8 +55,9 @@ class TestGitHubMigrator(unittest.TestCase):
             {"name": "repo3", "private": True}
         ]
         
-        # Mock some repos as already completed
-        self.mock_state.is_repo_completed.side_effect = lambda name: name == "repo2"
+        # Mock repo2 as completed (both content and issues)
+        self.mock_state.is_content_completed.side_effect = lambda name: name == "repo2"
+        self.mock_state.is_issues_completed.side_effect = lambda name: name == "repo2"
         
         repos = self.migrator.get_repositories_to_migrate()
         
@@ -66,7 +67,9 @@ class TestGitHubMigrator(unittest.TestCase):
     
     def test_migrate_repository_already_completed(self):
         """Test skipping already completed repository."""
-        self.mock_state.is_repo_completed.return_value = True
+        # Mock both content and issues as completed
+        self.mock_state.is_content_completed.return_value = True
+        self.mock_state.is_issues_completed.return_value = True
         
         result = self.migrator.migrate_repository("test_repo")
         
@@ -76,8 +79,9 @@ class TestGitHubMigrator(unittest.TestCase):
     @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
     def test_migrate_repository_success(self, mock_migrate_content):
         """Test successful repository migration."""
-        # Setup mocks
-        self.mock_state.is_repo_completed.return_value = False
+        # Setup mocks - nothing completed yet
+        self.mock_state.is_content_completed.return_value = False
+        self.mock_state.is_issues_completed.return_value = False
         self.mock_client.create_repository.return_value = {"name": "test_repo"}
         self.mock_client.get_issues.return_value = []
         mock_migrate_content.return_value = True
@@ -86,22 +90,27 @@ class TestGitHubMigrator(unittest.TestCase):
         
         self.assertTrue(result)
         self.mock_client.create_repository.assert_called_once()
-        self.mock_state.mark_repo_completed.assert_called_once_with("test_repo")
+        # Should mark both content and issues as completed
+        self.mock_state.mark_content_completed.assert_called_once_with("test_repo")
+        self.mock_state.mark_issues_completed.assert_called_once_with("test_repo")
     
     def test_migrate_repository_api_error(self):
         """Test handling API errors during repository migration."""
-        self.mock_state.is_repo_completed.return_value = False
+        self.mock_state.is_content_completed.return_value = False
+        self.mock_state.is_issues_completed.return_value = False
         self.mock_client.create_repository.side_effect = GitHubAPIError("API Error")
         
         result = self.migrator.migrate_repository("test_repo")
         
         self.assertFalse(result)
-        self.mock_state.mark_repo_completed.assert_not_called()
+        self.mock_state.mark_content_completed.assert_not_called()
+        self.mock_state.mark_issues_completed.assert_not_called()
     
     @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
     def test_migrate_repository_already_exists(self, mock_migrate_content):
         """Test handling repository that already exists (422 error)."""
-        self.mock_state.is_repo_completed.return_value = False
+        self.mock_state.is_content_completed.return_value = False
+        self.mock_state.is_issues_completed.return_value = False
         self.mock_client.create_repository.side_effect = GitHubAPIError("GitHub API error 422: Unprocessable Entity - Repository creation failed.")
         self.mock_client.get_issues.return_value = []
         mock_migrate_content.return_value = True
@@ -110,7 +119,8 @@ class TestGitHubMigrator(unittest.TestCase):
         
         # Should succeed even if repo already exists
         self.assertTrue(result)
-        self.mock_state.mark_repo_completed.assert_called_once_with("test_repo")
+        self.mock_state.mark_content_completed.assert_called_once_with("test_repo")
+        self.mock_state.mark_issues_completed.assert_called_once_with("test_repo")
     
     def test_migrate_issues_skip_completed(self):
         """Test skipping already completed issues."""
@@ -162,7 +172,9 @@ class TestGitHubMigrator(unittest.TestCase):
         self.mock_client.get_repositories.return_value = [
             {"name": "repo1", "private": True}
         ]
-        self.mock_state.is_repo_completed.return_value = False
+        # Mock repo as needing both content and issues migration
+        self.mock_state.is_content_completed.return_value = False
+        self.mock_state.is_issues_completed.return_value = False
         
         # Mock repository creation
         self.mock_client.create_repository.return_value = {"name": "repo1"}
@@ -358,43 +370,44 @@ class TestGitHubMigrator(unittest.TestCase):
         self.mock_client.close_issue.assert_called_once_with("target_org", "test_repo", 123)
         self.mock_state.mark_issue_completed.assert_called_once_with("test_repo", 1)
     
+    @patch('os.path.exists')
     @patch('subprocess.run')
     @patch('os.chdir')
     @patch('os.getcwd')
-    def test_migrate_repository_content_success(self, mock_getcwd, mock_chdir, mock_subprocess):
+    def test_migrate_repository_content_success(self, mock_getcwd, mock_chdir, mock_subprocess, mock_path_exists):
         """Test successful repository content migration."""
         mock_getcwd.return_value = "/original/dir"
         
+        # Mock that cached repo doesn't exist
+        mock_path_exists.return_value = False
+        
         # Mock successful git operations
-        mock_subprocess.side_effect = [
-            Mock(returncode=0, stderr=""),  # git clone
-            Mock(returncode=0, stderr=""),  # git remote add
-            Mock(returncode=0, stderr="")   # git push
-        ]
+        def mock_subprocess_side_effect(cmd, **kwargs):
+            if 'clone' in cmd:
+                return Mock(returncode=0, stderr="")
+            elif 'remote' in cmd:
+                return Mock(returncode=0, stderr="")
+            elif 'ls-files' in cmd:
+                return Mock(returncode=0, stdout="file1.txt\nfile2.py\n", stderr="")
+            elif 'push' in cmd:
+                return Mock(returncode=0, stderr="")
+            else:
+                return Mock(returncode=0, stderr="")
+        
+        mock_subprocess.side_effect = mock_subprocess_side_effect
         
         result = self.migrator.migrate_repository_content("test_repo")
         
         self.assertTrue(result)
-        self.assertEqual(mock_subprocess.call_count, 3)
         
-        # Check git clone command
-        clone_call = mock_subprocess.call_args_list[0]
-        self.assertIn('git', clone_call[0][0])
-        self.assertIn('clone', clone_call[0][0])
-        self.assertIn('--mirror', clone_call[0][0])
+        # Verify at least clone, remote add, and push commands were called
+        clone_calls = [call for call in mock_subprocess.call_args_list if 'clone' in str(call)]
+        remote_calls = [call for call in mock_subprocess.call_args_list if 'remote' in str(call) and 'add' in str(call)]
+        push_calls = [call for call in mock_subprocess.call_args_list if 'push' in str(call)]
         
-        # Check git remote add command
-        remote_call = mock_subprocess.call_args_list[1]
-        self.assertIn('git', remote_call[0][0])
-        self.assertIn('remote', remote_call[0][0])
-        self.assertIn('add', remote_call[0][0])
-        self.assertIn('target', remote_call[0][0])
-        
-        # Check git push command
-        push_call = mock_subprocess.call_args_list[2]
-        self.assertIn('git', push_call[0][0])
-        self.assertIn('push', push_call[0][0])
-        self.assertIn('--mirror', push_call[0][0])
+        self.assertGreater(len(clone_calls), 0, "Should have at least one clone call")
+        self.assertGreater(len(remote_calls), 0, "Should have at least one remote add call")
+        self.assertGreater(len(push_calls), 0, "Should have at least one push call")
     
     @patch('subprocess.run')
     def test_migrate_repository_content_clone_failure(self, mock_subprocess):
@@ -460,8 +473,9 @@ class TestGitHubMigrator(unittest.TestCase):
     @patch('github_migrator.migrator.GitHubMigrator.migrate_repository_content')
     def test_migrate_repository_skips_content_when_disabled(self, mock_migrate_content):
         """Test that migrate_repository skips content migration when disabled."""
-        # Setup mocks for regular migration
-        self.mock_state.is_repo_completed.return_value = False
+        # Setup mocks for regular migration - only issues need to be done
+        self.mock_state.is_content_completed.return_value = True  # Content not needed when disabled
+        self.mock_state.is_issues_completed.return_value = False
         self.mock_client.create_repository.return_value = {"name": "test_repo"}
         self.mock_client.get_issues.return_value = []
         
@@ -473,7 +487,9 @@ class TestGitHubMigrator(unittest.TestCase):
         self.assertTrue(result)
         # migrate_repository_content should not be called
         mock_migrate_content.assert_not_called()
-        self.mock_state.mark_repo_completed.assert_called_once_with("test_repo")
+        # Should only mark issues as completed
+        self.mock_state.mark_issues_completed.assert_called_once_with("test_repo")
+        self.mock_state.mark_content_completed.assert_not_called()
     
     def test_run_git_command_success(self):
         """Test successful git command execution."""

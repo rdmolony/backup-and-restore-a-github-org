@@ -177,7 +177,12 @@ class StateManager:
             state = self._read_state()
             completed = []
             for repo_name, repo_data in state["repositories"].items():
-                if repo_data.get("completed", False):
+                # Ensure repo structure is up to date
+                self._ensure_repo_exists(state, repo_name)
+                
+                # Repository is complete if both content and issues are complete
+                if (repo_data.get("content_completed", False) and 
+                    repo_data.get("issues_completed", False)):
                     completed.append(repo_name)
             return completed
     
